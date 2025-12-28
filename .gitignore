@@ -1,0 +1,27 @@
+# Ignore cmake-build-debug
+cmake-build-debug/
+
+# Ignore build directory
+build/
+
+# Ignore files generted by python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+
+# Ignore IDE specific files
+.vscode/
+.idea/
+
+# Ignore OS generated files
+.DS_Store
+
+# Ignore generated .txt or .png/.jpg files
+*.txt
+*.png
+*.jpg
+*.jpeg
