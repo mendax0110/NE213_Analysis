@@ -5,23 +5,24 @@
 #include <cmath>
 #include <numeric>
 #include <algorithm>
-
+#include <sstream>
 
 using namespace ne213;
-
 
 StatisticsReport Statistics::generate_report(
     const std::vector<WaveformData>& waveforms,
     const std::vector<PSDParameters>& psd_params,
     const double short_gate_ns,
     const double total_gate_ns,
-    const double energy_threshold)
+    const double energy_threshold,
+    const FileType file_type)
 {
     StatisticsReport report;
 
     report.total_events = waveforms.size();
     report.short_gate_ns = short_gate_ns;
     report.total_gate_ns = total_gate_ns;
+    report.file_type = file_type;
 
     std::vector<double> valid_psd;
     std::vector<double> valid_qtot;
@@ -32,9 +33,9 @@ StatisticsReport Statistics::generate_report(
     for (size_t i = 0; i < waveforms.size(); ++i)
     {
         amplitudes.push_back(waveforms[i].max_amplitude);
-        rise_times.push_back(waveforms[i].rise_time * NS_PRE_SAMPLE);
+        rise_times.push_back(waveforms[i].rise_time * NS_PER_SAMPLE);
 
-        if (psd_params[i].is_valid)
+        if (i < psd_params.size() && psd_params[i].is_valid)
         {
             report.valid_events++;
             valid_psd.push_back(psd_params[i].psd_values);
@@ -44,7 +45,6 @@ StatisticsReport Statistics::generate_report(
     }
 
     report.pileup_events = report.total_events - report.valid_events;
-
     report.mean_amplitude = calculate_mean(amplitudes);
     report.mean_rise_time_ns = calculate_mean(rise_times);
 
@@ -75,116 +75,136 @@ StatisticsReport Statistics::generate_report(
         }
     }
 
-    report.fom_result = PSDAnalyzer::calculate_fom(psd_params, energy_threshold);
-
-    if (!valid_psd.empty())
+    if (file_type == FileType::MIT)
     {
-        for (const auto& param : psd_params)
+        report.fom_result = PSDAnalyzer::calculate_fom(psd_params, energy_threshold);
+
+        if (!valid_psd.empty() && report.valid_events > 0)
         {
-            if (param.is_valid && param.psd_values > report.psd_median)
+            for (const auto& param : psd_params)
             {
-                report.estimated_neutron_count++;
+                if (param.is_valid && param.psd_values > report.psd_median)
+                {
+                    report.estimated_neutron_count++;
+                }
             }
+            report.neutron_fraction = static_cast<double>(report.estimated_neutron_count) / static_cast<double>(report.valid_events);
         }
-        report.neutron_fraction = static_cast<double>(report.estimated_neutron_count) / static_cast<double>(report.valid_events);
     }
 
     return report;
 }
 
-void Statistics::print_report(const StatisticsReport& report)
+std::string Statistics::get_fom_quality_text(const double fom)
 {
-    std::cout << std::string(70, '=') << "\n";
-    std::cout << "NE213 NEUTRON DETECTION ANALYSIS - Farnsworth Fusion Reactor\n";
-    std::cout << "Binda Charge Comparison Method Implementation\n";
-    std::cout << std::string(70, '=') << "\n";
-    std::cout << "Total events captured: " << report.total_events << "\n";
-    std::cout << "Valid events (pile-up rejected): " << report.valid_events
-              << " (" << std::fixed << std::setprecision(1)
-              << (100.0 * report.valid_events / report.total_events) << "%)\n";
-    std::cout << "Pile-up events rejected: " << report.pileup_events
-              << " (" << (100.0 * report.pileup_events / report.total_events) << "%)\n\n";
-
-    std::cout << "Detector Configuration:\n";
-    std::cout << "  Type: NE213 Liquid Scintillator\n";
-    std::cout << "  Target reaction: D-D fusion\n";
-    std::cout << "  Sampling rate: " << SAMPLE_RATE_GS << " GS/s ("
-              << NS_PRE_SAMPLE << " ns/sample)\n\n";
-
-    std::cout << "Pulse Characteristics:\n";
-    std::cout << "  Average amplitude: " << std::setprecision(2)
-              << report.mean_amplitude << "\n";
-    std::cout << "  Average rise time: " << report.mean_rise_time_ns << " ns\n\n";
-
-    std::cout << "Binda Charge Comparison Method (Equation 8):\n";
-    std::cout << "   PSD = (Qtot - Qshort) / Qtot\n";
-    std::cout << "  Short gate: " << report.short_gate_ns << " ns\n";
-    std::cout << "  Total gate: " << report.total_gate_ns << " ns\n";
-    std::cout << "  PSD range: [" << std::setprecision(4) << report.psd_min
-              << ", " << report.psd_max << "]\n";
-    std::cout << "  PSD mean: " << report.psd_mean << "\n";
-    std::cout << "  PSD std: " << report.psd_std << "\n\n";
-
-    std::cout << "Integrated Charges:\n";
-    std::cout << "  Qtot mean: " << std::setprecision(1) << report.qtot_mean << "\n";
-    std::cout << "  Qshort mean: " << report.qshort_mean << "\n";
-    std::cout << "  Slow component fraction: "
-              << (report.slow_component_fraction * 100.0) << "%\n\n";
-
-    std::cout << "Discrimination Performance (Binda Section 6.2):\n";
-    std::cout << "  Figure of Merit (FOM): " << std::setprecision(4)
-              << report.fom_result.fom << "\n";
-    std::cout << "  Reference values:\n";
-    std::cout << "    - Binda (NE213 at JET): FOM = 2.25-2.35 (VERY GOOD)\n";
-    std::cout << "    - Baselga (CCM baseline): FOM = 0.94\n";
-    std::cout << "    - Baselga (best method): FOM = 1.04\n";
-
-    if (report.fom_result.fom > 2.0)
+    if (fom > 2.0)
     {
-        std::cout << "  [RESULT] VERY GOOD discrimination (matching JET NE213 performance)\n";
-        std::cout << "  [RESULT] Estimated neutron events: "
-                  << report.estimated_neutron_count << " ("
-                  << (report.neutron_fraction * 100.0) << "%)\n";
-        std::cout << "  Actual FOM: " << std::setprecision(10)
-                  << report.fom_result.fom << "\n";
+        return "VERY GOOD (matching Binda JET results)";
     }
-    else if (report.fom_result.fom > 1.0)
+    if (fom > 1.0)
     {
-        std::cout << "   [RESULT] GOOD discrimination capability\n";
-        std::cout << "  [RESULT] Estimated neutron events: "
-                  << report.estimated_neutron_count << " ("
-                  << (report.neutron_fraction * 100.0) << "%)\n";
-        std::cout << "  Actual FOM: " << std::setprecision(10)
-                  << report.fom_result.fom << "\n";
+        return "GOOD discrimination capability";
     }
-    else if (report.fom_result.fom > 0.7)
+    if (fom > 0.7)
     {
-        std::cout << "  [RESULT] MODERATE discrimination -> Talk to Felix\n";
-        std::cout << "  [RESULT] Estimated neutron events: "
-                  << report.estimated_neutron_count << " ("
-                  << (report.neutron_fraction * 100.0) << "%)\n";
-        std::cout << "  Actual FOM: " << std::setprecision(10)
-                  << report.fom_result.fom << "\n";
+        return "MODERATE discrimination";
+    }
+    return "POOR discrimination";
+}
+
+std::string Statistics::generate_report_string(const StatisticsReport& report)
+{
+    std::ostringstream ss;
+
+    ss << std::string(70, '=') << "\n";
+    ss << "NE213 NEUTRON DETECTION ANALYSIS - Farnsworth Fusion Reactor\n";
+    ss << "File type: " << WaveformLoader::file_type_to_string(report.file_type) << "\n";
+    ss << "Binda Charge Comparison Method Implementation\n";
+    ss << std::string(70, '=') << "\n";
+    ss << "Total events captured: " << report.total_events << "\n";
+
+    if (report.file_type == FileType::MIT)
+    {
+        const double valid_pct = report.total_events > 0 ? (100.0 * report.valid_events / report.total_events) : 0.0;
+        const double pileup_pct = report.total_events > 0 ? (100.0 * report.pileup_events / report.total_events) : 0.0;
+
+        ss << std::fixed << std::setprecision(1);
+        ss << "Valid events (pile-up rejected): " << report.valid_events << " (" << valid_pct << "%)\n";
+        ss << "Pile-up events rejected: " << report.pileup_events << " (" << pileup_pct << "%)\n\n";
     }
     else
     {
-        std::cout << "  [RESULT] POOR discrimination -> Talk to Felix\n";
-        std::cout << "  Actual FOM: " << std::setprecision(10)
-                  << report.fom_result.fom << "\n";
+        ss << "Background measurement - no pile-up rejection applied\n\n";
     }
 
-    if (report.fom_result.gamma_peak > 0 && report.fom_result.neutron_peak > 0)
+    ss << "Detector Configuration:\n";
+    ss << "  Type: NE213 Liquid Scintillator\n";
+    ss << "  Target reaction: D-D fusion\n";
+    ss << "  Sampling rate: " << SAMPLE_RATE_GS << " GS/s (" << NS_PER_SAMPLE << " ns/sample)\n\n";
+
+    ss << "Pulse Characteristics:\n";
+    ss << std::setprecision(2);
+    ss << "  Average amplitude: " << report.mean_amplitude << "\n";
+    ss << "  Average rise time: " << report.mean_rise_time_ns << " ns\n\n";
+
+    if (report.file_type == FileType::MIT)
     {
-        std::cout << "\nPeak Positions:\n";
-        std::cout << "  Gamma peak (Y): " << std::setprecision(4)
-                  << report.fom_result.gamma_peak << "\n";
-        std::cout << "  Neutron peak (n): " << report.fom_result.neutron_peak << "\n";
-        std::cout << "  Separation: "
-                  << (report.fom_result.neutron_peak - report.fom_result.gamma_peak) << "\n";
-        std::cout << "  Peak ratio: " << std::setprecision(2)
-                  << (report.fom_result.neutron_peak / report.fom_result.gamma_peak) << "\n";
+        ss << "Binda Charge Comparison Method (Equation 8):\n";
+        ss << "   PSD = (Qtot - Qshort) / Qtot\n";
+        ss << "  Short gate: " << report.short_gate_ns << " ns\n";
+        ss << "  Total gate: " << report.total_gate_ns << " ns\n";
+        ss << std::setprecision(4);
+        ss << "  PSD range: [" << report.psd_min << ", " << report.psd_max << "]\n";
+        ss << "  PSD mean: " << report.psd_mean << "\n";
+        ss << "  PSD std: " << report.psd_std << "\n\n";
+
+        ss << "Integrated Charges:\n";
+        ss << std::setprecision(1);
+        ss << "  Qtot mean: " << report.qtot_mean << "\n";
+        ss << "  Qshort mean: " << report.qshort_mean << "\n";
+        ss << "  Slow component fraction: " << (report.slow_component_fraction * 100.0) << "%\n\n";
+
+        ss << "Discrimination Performance (Binda Section 6.2):\n";
+        ss << std::setprecision(4);
+        ss << "  Figure of Merit (FOM): " << report.fom_result.fom << "\n";
+        ss << "  Reference values:\n";
+        ss << "    - Binda (NE213 at JET): FOM = 2.25-2.35 (VERY GOOD)\n";
+        ss << "    - Baselga (CCM baseline): FOM = 0.94\n";
+        ss << "    - Baselga (best method): FOM = 1.04\n";
+        ss << "  [RESULT] " << get_fom_quality_text(report.fom_result.fom) << "\n";
+
+        if (report.fom_result.fom > 0.7)
+        {
+            ss << "  Estimated neutron events: " << report.estimated_neutron_count
+               << " (" << std::setprecision(1) << (report.neutron_fraction * 100.0) << "%)\n";
+        }
+
+        if (report.fom_result.gamma_peak > 0 && report.fom_result.neutron_peak > 0)
+        {
+            ss << "\nPeak Positions:\n";
+            ss << std::setprecision(4);
+            ss << "  Gamma peak (Y): " << report.fom_result.gamma_peak << "\n";
+            ss << "  Neutron peak (n): " << report.fom_result.neutron_peak << "\n";
+            ss << "  Separation: " << (report.fom_result.neutron_peak - report.fom_result.gamma_peak) << "\n";
+            ss << std::setprecision(2);
+            ss << "  Peak ratio: " << (report.fom_result.neutron_peak / report.fom_result.gamma_peak) << "\n";
+        }
     }
-    std::cout << "\n";
+    else
+    {
+        ss << "Background Measurement Summary:\n";
+        ss << "  This data represents background noise (cosmic rays, natural radioactivity, etc.)\n";
+        ss << "  Use this for noise characterization and background subtraction\n";
+        ss << "  No neutron/gamma discrimination analysis performed on background data\n";
+    }
+
+    ss << "\n";
+    return ss.str();
+}
+
+void Statistics::print_report(const StatisticsReport& report)
+{
+    std::cout << generate_report_string(report);
 }
 
 double Statistics::calculate_mean(const std::vector<double>& values)

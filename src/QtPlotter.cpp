@@ -15,8 +15,26 @@
 #include <QVBoxLayout>
 #include <QMenuBar>
 #include <QGroupBox>
+#include <QGridLayout>
+#include <QFile>
+#include <QTextStream>
 
 using namespace ne213;
+
+QString QtPlotter::select_file()
+{
+    return QFileDialog::getOpenFileName(
+        nullptr,
+        "Select NE213 waveform file",
+        QString(),
+        "Text files (*.txt);;All files (*.*)"
+    );
+}
+
+void QtPlotter::set_file_type(const FileType type)
+{
+    currentFileType = type;
+}
 
 QtPlotter::QtPlotter(QWidget *parent) : QMainWindow(parent)
 {
@@ -170,7 +188,7 @@ std::vector<double> QtPlotter::create_time_axis(const size_t n_samples)
     std::vector<double> time(n_samples);
     for (size_t i = 0; i < n_samples; ++i)
     {
-        time[i] = i * NS_PRE_SAMPLE;
+        time[i] = i * NS_PER_SAMPLE;
     }
     return time;
 }
@@ -195,94 +213,146 @@ QColor QtPlotter::get_color_from_value(const double value, const double min_val,
 
 void QtPlotter::plot_average_pulse_shapes(const std::vector<WaveformData>& waveforms, const std::vector<PSDParameters>& psd_params) const
 {
-    if (waveforms.empty() || psd_params.empty()) return;
+    if (waveforms.empty()) return;
 
-    std::vector<std::pair<double, size_t>> psd_indices;
-    for (size_t i = 0; i < psd_params.size(); ++i)
-    {
-        if (psd_params[i].is_valid)
-        {
-            psd_indices.emplace_back(psd_params[i].psd_values, i);
-        }
-    }
-
-    std::ranges::sort(psd_indices);
-    if (psd_indices.size() < 10) return;
-    const size_t third = psd_indices.size() / 3;
-
-    std::vector avg_low(waveforms[0].data.size(), 0.0);
-    std::vector avg_high(waveforms[0].data.size(), 0.0);
-
-    for (size_t i = 0; i < third; ++i)
-    {
-        const size_t idx = psd_indices[i].second;
-        for (size_t j = 0; j < avg_low.size(); ++j)
-        {
-            avg_low[j] += waveforms[idx].data[j];
-        }
-    }
-
-    for (size_t i = psd_indices.size() - third; i < psd_indices.size(); ++i)
-    {
-        const size_t idx = psd_indices[i].second;
-        for (size_t j = 0; j < avg_high.size(); ++j)
-        {
-            avg_high[j] += waveforms[idx].data[j];
-        }
-    }
-
-    for (auto& v : avg_low) v /= third;
-    for (auto& v : avg_high) v /= third;
-
-    const auto time_axis = create_time_axis(avg_low.size());
+    const auto time_axis = create_time_axis(waveforms[0].data.size());
 
     const auto chart = new QChart();
-    chart->setTitle("Average Pulse Shapes: Neutron vs Gamma (log scale)");
     chart->setAnimationOptions(QChart::NoAnimation);
     chart->setMargins(QMargins(10, 10, 10, 10));
 
-    const auto lowSeries = new QLineSeries();
-    lowSeries->setName("Low PSD (Gamma)");
-    lowSeries->setPen(QPen(Qt::blue, 2.0));
-
-    for (size_t i = 0; i < avg_low.size(); ++i)
+    if (currentFileType == FileType::MIT && !psd_params.empty())
     {
-        lowSeries->append(time_axis[i], std::max(0.1, avg_low[i]));
+        chart->setTitle("Average Pulse Shapes: Neutron vs Gamma (log scale)");
+
+        std::vector<std::pair<double, size_t>> psd_indices;
+        for (size_t i = 0; i < psd_params.size(); ++i)
+        {
+            if (psd_params[i].is_valid)
+            {
+                psd_indices.emplace_back(psd_params[i].psd_values, i);
+            }
+        }
+
+        std::ranges::sort(psd_indices);
+        if (psd_indices.size() < 10)
+        {
+            avgWaveformChartView->setChart(chart);
+            return;
+        }
+
+        const size_t third = psd_indices.size() / 3;
+
+        std::vector avg_low(waveforms[0].data.size(), 0.0);
+        std::vector avg_high(waveforms[0].data.size(), 0.0);
+
+        for (size_t i = 0; i < third; ++i)
+        {
+            const size_t idx = psd_indices[i].second;
+            for (size_t j = 0; j < avg_low.size(); ++j)
+            {
+                avg_low[j] += waveforms[idx].data[j];
+            }
+        }
+
+        for (size_t i = psd_indices.size() - third; i < psd_indices.size(); ++i)
+        {
+            const size_t idx = psd_indices[i].second;
+            for (size_t j = 0; j < avg_high.size(); ++j)
+            {
+                avg_high[j] += waveforms[idx].data[j];
+            }
+        }
+
+        for (auto& v : avg_low) v /= static_cast<double>(third);
+        for (auto& v : avg_high) v /= static_cast<double>(third);
+
+        const auto lowSeries = new QLineSeries();
+        lowSeries->setName("Low PSD (Gamma)");
+        lowSeries->setPen(QPen(Qt::blue, 2.0));
+
+        for (size_t i = 0; i < avg_low.size(); ++i)
+        {
+            lowSeries->append(time_axis[i], std::max(0.1, avg_low[i]));
+        }
+
+        const auto highSeries = new QLineSeries();
+        highSeries->setName("High PSD (Neutron)");
+        highSeries->setPen(QPen(Qt::red, 2.0));
+
+        for (size_t i = 0; i < avg_high.size(); ++i)
+        {
+            highSeries->append(time_axis[i], std::max(0.1, avg_high[i]));
+        }
+
+        chart->addSeries(lowSeries);
+        chart->addSeries(highSeries);
+
+        add_gate_lines(chart, currentShortGate, currentTotalGate, 100000);
+
+        const auto axisX = new QValueAxis();
+        axisX->setTitleText("Time (ns)");
+        axisX->setLabelFormat("%.0f");
+        axisX->setRange(0, 175);
+        axisX->setTickCount(8);
+        chart->addAxis(axisX, Qt::AlignBottom);
+
+        const auto axisY = new QLogValueAxis();
+        axisY->setTitleText("Amplitude");
+        axisY->setLabelFormat("%.0e");
+        axisY->setBase(10.0);
+        axisY->setMin(0.1);
+        axisY->setMax(100000);
+        chart->addAxis(axisY, Qt::AlignLeft);
+
+        lowSeries->attachAxis(axisX);
+        lowSeries->attachAxis(axisY);
+        highSeries->attachAxis(axisX);
+        highSeries->attachAxis(axisY);
     }
-
-    const auto highSeries = new QLineSeries();
-    highSeries->setName("High PSD (Neutron)");
-    highSeries->setPen(QPen(Qt::red, 2.0));
-
-    for (size_t i = 0; i < avg_high.size(); ++i)
+    else
     {
-        highSeries->append(time_axis[i], std::max(0.1, avg_high[i]));
+        chart->setTitle("Average Background Pulse Shape");
+
+        std::vector avg_wf(waveforms[0].data.size(), 0.0);
+        for (const auto& wf : waveforms)
+        {
+            for (size_t j = 0; j < avg_wf.size() && j < wf.data.size(); ++j)
+            {
+                avg_wf[j] += wf.data[j];
+            }
+        }
+        for (auto& v : avg_wf)
+        {
+            v /= static_cast<double>(waveforms.size());
+        }
+
+        const auto avgSeries = new QLineSeries();
+        avgSeries->setName("Background Average");
+        avgSeries->setPen(QPen(Qt::green, 2.0));
+
+        for (size_t i = 0; i < avg_wf.size(); ++i)
+        {
+            avgSeries->append(time_axis[i], std::max(0.1, avg_wf[i]));
+        }
+
+        chart->addSeries(avgSeries);
+
+        const auto axisX = new QValueAxis();
+        axisX->setTitleText("Time (ns)");
+        axisX->setLabelFormat("%.0f");
+        axisX->setRange(0, 175);
+        axisX->setTickCount(8);
+        chart->addAxis(axisX, Qt::AlignBottom);
+
+        const auto axisY = new QValueAxis();
+        axisY->setTitleText("Amplitude");
+        axisY->setLabelFormat("%.0f");
+        chart->addAxis(axisY, Qt::AlignLeft);
+
+        avgSeries->attachAxis(axisX);
+        avgSeries->attachAxis(axisY);
     }
-
-    chart->addSeries(lowSeries);
-    chart->addSeries(highSeries);
-
-    add_gate_lines(chart, currentShortGate, currentTotalGate, 100000);
-
-    const auto axisX = new QValueAxis();
-    axisX->setTitleText("Time (ns)");
-    axisX->setLabelFormat("%.0f");
-    axisX->setRange(0, 175);
-    axisX->setTickCount(8);
-    chart->addAxis(axisX, Qt::AlignBottom);
-
-    const auto axisY = new QLogValueAxis();
-    axisY->setTitleText("Amplitude");
-    axisY->setLabelFormat("%.0e");
-    axisY->setBase(10.0);
-    axisY->setMin(0.1);
-    axisY->setMax(100000);
-    chart->addAxis(axisY, Qt::AlignLeft);
-
-    lowSeries->attachAxis(axisX);
-    lowSeries->attachAxis(axisY);
-    highSeries->attachAxis(axisX);
-    highSeries->attachAxis(axisY);
 
     chart->legend()->setVisible(true);
     chart->legend()->setAlignment(Qt::AlignBottom);
@@ -348,6 +418,15 @@ void QtPlotter::plot_psd_scatter(const std::vector<PSDParameters>& psd_params)
 {
     currentPsdParams = psd_params;
 
+    if (currentFileType != FileType::MIT)
+    {
+        const auto chart = new QChart();
+        chart->setTitle("Background Measurement\nNo PSD Analysis Available");
+        chart->setAnimationOptions(QChart::NoAnimation);
+        psdScatterChartView->setChart(chart);
+        return;
+    }
+
     std::vector<double> qtot, psd_values;
     for (const auto& p : psd_params)
     {
@@ -366,6 +445,8 @@ void QtPlotter::plot_psd_scatter(const std::vector<PSDParameters>& psd_params)
 
     const double min_psd = *std::ranges::min_element(psd_values);
     const double max_psd = *std::ranges::max_element(psd_values);
+    const double min_qtot = *std::ranges::min_element(qtot);
+    const double max_qtot = *std::ranges::max_element(qtot);
 
     constexpr int num_color_bands = 20;
     std::vector<QScatterSeries*> series_list(num_color_bands);
@@ -403,9 +484,6 @@ void QtPlotter::plot_psd_scatter(const std::vector<PSDParameters>& psd_params)
     std::ranges::sort(sorted_psd);
     const double median_psd = sorted_psd[sorted_psd.size() / 2];
 
-    const double min_qtot = *std::ranges::min_element(qtot);
-    const double max_qtot = *std::ranges::max_element(qtot);
-
     const auto medianLine = new QLineSeries();
     medianLine->setName(QString("Discrimination threshold (median PSD=%1)").arg(median_psd, 0, 'f', 3));
     medianLine->append(min_qtot, median_psd);
@@ -414,17 +492,20 @@ void QtPlotter::plot_psd_scatter(const std::vector<PSDParameters>& psd_params)
 
     chart->addSeries(medianLine);
 
+    const double qtot_margin = (max_qtot - min_qtot) * 0.05;
+    const double psd_margin = (max_psd - min_psd) * 0.05;
+
     const auto axisX = new QValueAxis();
     axisX->setTitleText("Qtot - Total Charge (Energy Proxy)");
     axisX->setLabelFormat("%.0f");
-    axisX->setRange(100000, 700000);
+    axisX->setRange(min_qtot - qtot_margin, max_qtot + qtot_margin);
     axisX->setTickCount(7);
     chart->addAxis(axisX, Qt::AlignBottom);
 
     const auto axisY = new QValueAxis();
     axisY->setTitleText("PSD = (Qtot - Qshort) / Qtot");
     axisY->setLabelFormat("%.3f");
-    axisY->setRange(0.125, 0.300);
+    axisY->setRange(min_psd - psd_margin, max_psd + psd_margin);
     axisY->setTickCount(8);
     chart->addAxis(axisY, Qt::AlignLeft);
 
@@ -462,6 +543,16 @@ void QtPlotter::plot_psd_histogram(const std::vector<PSDParameters>& psd_params,
 
 void QtPlotter::update_psd_histogram()
 {
+    if (currentFileType != FileType::MIT)
+    {
+        auto* chart = new QChart();
+        chart->setTitle("Background Measurement\nNo PSD Analysis Available\n\nPSD histogram only applicable for 'mit' (measurement) files");
+        chart->setAnimationOptions(QChart::NoAnimation);
+        fomLabel->setText("Figure of Merit (FOM): N/A (background)");
+        psdHistogramChartView->setChart(chart);
+        return;
+    }
+
     const PSDAnalyzer analyzer(currentShortGate, currentTotalGate, 10.0);
 
     std::vector<PSDParameters> updated_params;
@@ -505,7 +596,7 @@ void QtPlotter::update_psd_histogram()
         }
     }
 
-    auto *chart = new QChart();
+    auto* chart = new QChart();
 
     const int short_gate_samples = ns_to_sample(currentShortGate);
     const int total_gate_samples = ns_to_sample(currentTotalGate);
@@ -525,22 +616,7 @@ void QtPlotter::update_psd_histogram()
                  .arg(currentFomResult.gamma_peak, 0, 'f', 3)
                  .arg(currentFomResult.neutron_peak, 0, 'f', 3);
 
-        if (currentFomResult.fom > 2.0)
-        {
-            title += " | VERY GOOD (matching Binda JET results)";
-        }
-        else if (currentFomResult.fom > 1.0)
-        {
-            title += " | GOOD discrimination";
-        }
-        else if (currentFomResult.fom > 0.5)
-        {
-            title += " | MODERATE discrimination";
-        }
-        else
-        {
-            title += " | POOR - optimize windows";
-        }
+        title += QString(" | %1").arg(QString::fromStdString(Statistics::get_fom_quality_text(currentFomResult.fom)));
     }
 
     chart->setTitle(title);
@@ -596,265 +672,245 @@ void QtPlotter::update_psd_histogram()
 
 void QtPlotter::plot_statistics(const std::vector<WaveformData>& waveforms, const std::vector<PSDParameters>& psd_params) const
 {
-    if (waveforms.empty() || psd_params.empty()) return;
+    if (waveforms.empty()) return;
 
-    // 1. Amplitude distribution
     std::vector<double> amplitudes;
     for (const auto& wf : waveforms)
     {
         amplitudes.push_back(wf.max_amplitude);
     }
 
-    QChart *ampChart = create_value_histogram(amplitudes, 50,
+    QChart* ampChart = create_value_histogram(amplitudes, 50,
                                             "Pulse Amplitude Distribution",
                                             "Peak Amplitude (a.u.)",
                                             "Counts",
                                             QColor(128, 0, 128));
 
-    auto ampXAxes = ampChart->axes(Qt::Horizontal);
-    if (!ampXAxes.isEmpty())
+    if (ampChart != nullptr)
     {
-        auto axisX = qobject_cast<QBarCategoryAxis*>(ampXAxes.first());
-        if (axisX)
-        {
-            QStringList ampLabels;
-            for (int val = 0; val <= 25000; val += 5000)
-            {
-                ampLabels << QString::number(val);
-            }
-            axisX->clear();
-            axisX->append(ampLabels);
-        }
+        amplitudeHistView->setChart(ampChart);
     }
 
-    auto ampYAxes = ampChart->axes(Qt::Vertical);
-    if (!ampYAxes.isEmpty())
-    {
-        auto axisY = qobject_cast<QValueAxis*>(ampYAxes.first());
-        if (axisY)
-        {
-            axisY->setRange(0, 800);
-            axisY->setTickCount(9);
-        }
-    }
-
-    amplitudeHistView->setChart(ampChart);
-
-    // 2. Rise time distribution
     std::vector<double> rise_times_ns;
     for (const auto& wf : waveforms)
     {
         rise_times_ns.push_back(samples_to_ns(wf.rise_time));
     }
 
-    QChart *riseChart = create_value_histogram(rise_times_ns, 50,
+    QChart* riseChart = create_value_histogram(rise_times_ns, 50,
                                              "Pulse Rise Time Distribution\n(10%-90% of peak)",
                                              "Rise Time (ns)",
                                              "Counts",
                                              QColor(255, 165, 0));
 
-    auto riseXAxes = riseChart->axes(Qt::Horizontal);
-    if (!riseXAxes.isEmpty())
+    if (riseChart != nullptr)
     {
-        auto axisX = qobject_cast<QBarCategoryAxis*>(riseXAxes.first());
-        if (axisX)
-        {
-            QStringList riseLabels;
-            for (int val = 0; val <= 175; val += 25)
-            {
-                riseLabels << QString::number(val);
-            }
-            axisX->clear();
-            axisX->append(riseLabels);
-        }
+        riseTimeHistView->setChart(riseChart);
     }
 
-    auto riseYAxes = riseChart->axes(Qt::Vertical);
-    if (!riseYAxes.isEmpty())
+    if (currentFileType == FileType::MIT && !psd_params.empty())
     {
-        if (auto axisY = qobject_cast<QValueAxis*>(riseYAxes.first()))
+        std::vector<double> qtot_plot, qshort_plot, psd_plot;
+        for (const auto& [psd_values, qtot, qshort, is_valid] : psd_params)
         {
-            axisY->setRange(0, 1400);
-            axisY->setTickCount(8);
+            if (is_valid)
+            {
+                qtot_plot.push_back(qtot);
+                qshort_plot.push_back(qshort);
+                psd_plot.push_back(psd_values);
+            }
+        }
+
+        if (!qtot_plot.empty())
+        {
+            auto scatterChart = new QChart();
+            scatterChart->setTitle("Short vs Total Charge (Binda Method)\n(Valid events, pile-up rejected)");
+            scatterChart->setAnimationOptions(QChart::NoAnimation);
+
+            const double min_psd = *std::ranges::min_element(psd_plot);
+            const double max_psd = *std::ranges::max_element(psd_plot);
+            const double min_qtot = *std::ranges::min_element(qtot_plot);
+            const double max_qtot = *std::ranges::max_element(qtot_plot);
+            const double min_qshort = *std::ranges::min_element(qshort_plot);
+            const double max_qshort = *std::ranges::max_element(qshort_plot);
+
+            constexpr int num_color_bands = 20;
+            std::vector<QScatterSeries*> series_list(num_color_bands);
+
+            for (int s = 0; s < num_color_bands; ++s)
+            {
+                series_list[s] = new QScatterSeries();
+                double norm = static_cast<double>(s) / (num_color_bands - 1);
+                QColor color = get_color_from_value(norm * (max_psd - min_psd) + min_psd, min_psd, max_psd);
+                series_list[s]->setColor(color);
+                series_list[s]->setBorderColor(Qt::black);
+                series_list[s]->setMarkerSize(4.0);
+            }
+
+            for (size_t i = 0; i < qtot_plot.size(); ++i)
+            {
+                double norm = (psd_plot[i] - min_psd) / (max_psd - min_psd);
+                int band_idx = std::min(num_color_bands - 1, static_cast<int>(norm * num_color_bands));
+                series_list[band_idx]->append(qtot_plot[i], qshort_plot[i]);
+            }
+
+            for (auto* s : series_list)
+            {
+                if (s->count() > 0)
+                {
+                    scatterChart->addSeries(s);
+                }
+            }
+
+            const double qtot_margin = (max_qtot - min_qtot) * 0.05;
+            const double qshort_margin = (max_qshort - min_qshort) * 0.05;
+
+            auto axisX = new QValueAxis();
+            axisX->setTitleText("Qtot (total charge)");
+            axisX->setLabelFormat("%.0f");
+            axisX->setRange(min_qtot - qtot_margin, max_qtot + qtot_margin);
+            axisX->setTickCount(7);
+            scatterChart->addAxis(axisX, Qt::AlignBottom);
+
+            auto axisY = new QValueAxis();
+            axisY->setTitleText("Qshort (short gate charge)");
+            axisY->setLabelFormat("%.0f");
+            axisY->setRange(min_qshort - qshort_margin, max_qshort + qshort_margin);
+            axisY->setTickCount(5);
+            scatterChart->addAxis(axisY, Qt::AlignLeft);
+
+            for (auto* s : series_list)
+            {
+                if (s->count() > 0)
+                {
+                    s->attachAxis(axisX);
+                    s->attachAxis(axisY);
+                }
+            }
+
+            scatterChart->legend()->setVisible(false);
+            qtotQshortView->setChart(scatterChart);
+        }
+
+        std::vector<double> psd_valid;
+        for (const auto& p : psd_params)
+        {
+            if (p.is_valid)
+            {
+                psd_valid.push_back(p.psd_values);
+            }
+        }
+
+        if (!psd_valid.empty())
+        {
+            constexpr int bins = 100;
+            const double min_psd = *std::ranges::min_element(psd_valid);
+            const double max_psd = *std::ranges::max_element(psd_valid);
+
+            std::vector<double> bin_edges(bins + 1);
+            const double range = max_psd - min_psd;
+
+            for (int i = 0; i <= bins; ++i)
+            {
+                bin_edges[i] = min_psd + (i * range / bins);
+            }
+
+            std::vector<int> counts(bins, 0);
+            std::vector<double> bin_centers(bins);
+
+            for (int i = 0; i < bins; ++i)
+            {
+                bin_centers[i] = (bin_edges[i] + bin_edges[i + 1]) / 2.0;
+            }
+
+            for (const double psd_val : psd_valid)
+            {
+                if (psd_val < min_psd || psd_val > max_psd) continue;
+
+                int bin_idx = static_cast<int>((psd_val - min_psd) / range * bins);
+
+                if (bin_idx >= bins)
+                {
+                    bin_idx = bins - 1;
+                }
+
+                counts[bin_idx]++;
+            }
+
+            auto psdChart = new QChart();
+            psdChart->setTitle("PSD Parameter Distribution (log scale)");
+            psdChart->setAnimationOptions(QChart::NoAnimation);
+
+            auto series = new QBarSeries();
+            auto barSet = new QBarSet("PSD");
+
+            for (int i = 0; i < bins; ++i)
+            {
+                *barSet << std::max(1, counts[i]);
+            }
+
+            barSet->setColor(QColor(0, 128, 0, 180));
+            barSet->setBorderColor(Qt::black);
+            series->append(barSet);
+            psdChart->addSeries(series);
+
+            QStringList psdLabels;
+            constexpr int label_step = bins / 8;
+            for (int i = 0; i < bins; ++i)
+            {
+                if (i % label_step == 0)
+                {
+                    psdLabels << QString::number(bin_centers[i], 'f', 3);
+                }
+                else
+                {
+                    psdLabels << "";
+                }
+            }
+
+            auto* axisX = new QBarCategoryAxis();
+            axisX->append(psdLabels);
+            axisX->setTitleText("PSD = (Qtot - Qshort) / Qtot");
+            psdChart->addAxis(axisX, Qt::AlignBottom);
+            series->attachAxis(axisX);
+
+            auto* logAxis = new QLogValueAxis();
+            logAxis->setTitleText("Counts");
+            logAxis->setBase(10.0);
+            logAxis->setLabelFormat("%.0e");
+            logAxis->setMin(1);
+            logAxis->setMax(std::max(10, *std::ranges::max_element(counts) * 2));
+            psdChart->addAxis(logAxis, Qt::AlignLeft);
+            series->attachAxis(logAxis);
+
+            psdChart->legend()->setVisible(false);
+
+            psdDistView->setChart(psdChart);
         }
     }
-
-    riseTimeHistView->setChart(riseChart);
-
-    // 3. Qtot vs Qshort scatter
-    std::vector<double> qtot_plot, qshort_plot, psd_plot;
-    for (const auto&[psd_values, qtot, qshort, is_valid] : psd_params)
+    else
     {
-        if (is_valid)
-        {
-            qtot_plot.push_back(qtot);
-            qshort_plot.push_back(qshort);
-            psd_plot.push_back(psd_values);
-        }
-    }
+        auto bgChart1 = new QChart();
+        bgChart1->setTitle("Background Measurement");
+        bgChart1->setAnimationOptions(QChart::NoAnimation);
 
-    if (!qtot_plot.empty())
-    {
-        auto scatterChart = new QChart();
-        scatterChart->setTitle("Short vs Total Charge (Binda Method)\n(Valid events, pile-up rejected)");
-        scatterChart->setAnimationOptions(QChart::NoAnimation);
+        auto textSeries1 = new QLineSeries();
+        textSeries1->setName("No PSD Analysis Required");
+        bgChart1->addSeries(textSeries1);
+        bgChart1->legend()->setVisible(true);
+        bgChart1->legend()->setAlignment(Qt::AlignCenter);
+        qtotQshortView->setChart(bgChart1);
 
-        const double min_psd = *std::ranges::min_element(psd_plot);
-        const double max_psd = *std::ranges::max_element(psd_plot);
+        auto bgChart2 = new QChart();
+        bgChart2->setTitle("Background Reference");
+        bgChart2->setAnimationOptions(QChart::NoAnimation);
 
-        constexpr int num_color_bands = 20;
-        std::vector<QScatterSeries*> series_list(num_color_bands);
-
-        for (int s = 0; s < num_color_bands; ++s)
-        {
-            series_list[s] = new QScatterSeries();
-            double norm = static_cast<double>(s) / (num_color_bands - 1);
-            QColor color = get_color_from_value(norm * (max_psd - min_psd) + min_psd, min_psd, max_psd);
-            series_list[s]->setColor(color);
-            series_list[s]->setBorderColor(Qt::black);
-            series_list[s]->setMarkerSize(4.0);
-        }
-
-        for (size_t i = 0; i < qtot_plot.size(); ++i)
-        {
-            double norm = (psd_plot[i] - min_psd) / (max_psd - min_psd);
-            int band_idx = std::min(num_color_bands - 1, static_cast<int>(norm * num_color_bands));
-            series_list[band_idx]->append(qtot_plot[i], qshort_plot[i]);
-        }
-
-        for (auto* s : series_list)
-        {
-            if (s->count() > 0)
-            {
-                scatterChart->addSeries(s);
-            }
-        }
-
-        auto axisX = new QValueAxis();
-        axisX->setTitleText("Qtot (total charge)");
-        axisX->setLabelFormat("%.0f");
-        axisX->setRange(100000, 700000);
-        axisX->setTickCount(7);  // 100k, 200k, ..., 700k
-        scatterChart->addAxis(axisX, Qt::AlignBottom);
-
-        auto axisY = new QValueAxis();
-        axisY->setTitleText("Qshort (short gate charge)");
-        axisY->setLabelFormat("%.0f");
-        axisY->setRange(100000, 500000);
-        axisY->setTickCount(5);  // 100k, 200k, 300k, 400k, 500k
-        scatterChart->addAxis(axisY, Qt::AlignLeft);
-
-        for (auto* s : series_list)
-        {
-            if (s->count() > 0)
-            {
-                s->attachAxis(axisX);
-                s->attachAxis(axisY);
-            }
-        }
-
-        scatterChart->legend()->setVisible(false);
-        qtotQshortView->setChart(scatterChart);
-    }
-
-    // 4. PSD parameter distribution (log scale)
-    std::vector<double> psd_valid;
-    for (const auto& p : psd_params)
-    {
-        if (p.is_valid)
-        {
-            psd_valid.push_back(p.psd_values);
-        }
-    }
-
-    if (!psd_valid.empty())
-    {
-        constexpr int bins = 100;
-        const double min_psd = *std::ranges::min_element(psd_valid);
-        const double max_psd = *std::ranges::max_element(psd_valid);
-
-        std::vector<double> bin_edges(bins + 1);
-        const double range = max_psd - min_psd;
-
-        for (int i = 0; i <= bins; ++i)
-        {
-            bin_edges[i] = min_psd + (i * range / bins);
-        }
-
-        std::vector<int> counts(bins, 0);
-        std::vector<double> bin_centers(bins);
-
-
-        for (int i = 0; i < bins; ++i)
-        {
-            bin_centers[i] = (bin_edges[i] + bin_edges[i + 1]) / 2.0;
-        }
-
-        for (const double psd_val : psd_valid)
-        {
-            if (psd_val < min_psd || psd_val > max_psd) continue;
-
-            int bin_idx = static_cast<int>((psd_val - min_psd) / range * bins);
-
-            if (bin_idx >= bins)
-            {
-                bin_idx = bins - 1;
-            }
-
-            counts[bin_idx]++;
-        }
-
-        auto psdChart = new QChart();
-        psdChart->setTitle("PSD Parameter Distribution (log scale)");
-        psdChart->setAnimationOptions(QChart::NoAnimation);
-
-        auto series = new QBarSeries();
-        auto barSet = new QBarSet("PSD");
-
-        for (int i = 0; i < bins; ++i)
-        {
-            *barSet << std::max(1, counts[i]);
-        }
-
-        barSet->setColor(QColor(0, 128, 0, 180));
-        barSet->setBorderColor(Qt::black);
-        series->append(barSet);
-        psdChart->addSeries(series);
-
-
-        QStringList psdLabels;
-        constexpr int label_step = bins / 8;
-        for (int i = 0; i < bins; ++i)
-        {
-            if (i % label_step == 0)
-            {
-                psdLabels << QString::number(bin_centers[i], 'f', 3);
-            }
-            else
-            {
-                psdLabels << "";
-            }
-        }
-
-        auto *axisX = new QBarCategoryAxis();
-        axisX->append(psdLabels);
-        axisX->setTitleText("PSD = (Qtot - Qshort) / Qtot");
-        psdChart->addAxis(axisX, Qt::AlignBottom);
-        series->attachAxis(axisX);
-
-        // Log Y axis
-        auto *logAxis = new QLogValueAxis();
-        logAxis->setTitleText("Counts");
-        logAxis->setBase(10.0);
-        logAxis->setLabelFormat("%.0e");
-        logAxis->setMin(1);      // 10⁰
-        logAxis->setMax(10);     // 10¹
-        psdChart->addAxis(logAxis, Qt::AlignLeft);
-        series->attachAxis(logAxis);
-
-        psdChart->legend()->setVisible(false);
-
-        psdDistView->setChart(psdChart);
+        auto textSeries2 = new QLineSeries();
+        textSeries2->setName("Use for noise characterization");
+        bgChart2->addSeries(textSeries2);
+        bgChart2->legend()->setVisible(true);
+        bgChart2->legend()->setAlignment(Qt::AlignCenter);
+        psdDistView->setChart(bgChart2);
     }
 }
 
@@ -1056,10 +1112,15 @@ void QtPlotter::export_data()
 
 void QtPlotter::show_summary(const std::vector<WaveformData>& waveforms, const std::vector<PSDParameters>& psd_params) const
 {
-    const StatisticsReport report = Statistics::generate_report(waveforms, psd_params, currentShortGate, currentTotalGate, currentEnergyThreshold);
+    const StatisticsReport report = Statistics::generate_report(
+        waveforms,
+        psd_params,
+        currentShortGate,
+        currentTotalGate,
+        currentEnergyThreshold,
+        currentFileType
+    );
 
-    const std::stringstream ss;
-    Statistics::print_report(report);
-
-    summaryText->setText(QString::fromStdString(ss.str()));
+    const std::string report_str = Statistics::generate_report_string(report);
+    summaryText->setText(QString::fromStdString(report_str));
 }
