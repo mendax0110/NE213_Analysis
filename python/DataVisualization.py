@@ -8,6 +8,12 @@ import tkinter as tk
 from tkinter import filedialog
 import os
 
+##############################################################
+# NOTE: AdrGos: Recommended to run in a virtual environment
+# python -m venv ne213_env
+# source ne213_env/bin/activate
+##############################################################
+
 # Teledyne Lecroy WaveAce 2024: 200 MHz, 2 GS/s
 SAMPLE_RATE_GS = 2.0  # GigaSamples per second
 NS_PER_SAMPLE = 1.0 / SAMPLE_RATE_GS  # 0.5 ns per sample
