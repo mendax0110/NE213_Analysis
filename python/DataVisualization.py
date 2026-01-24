@@ -5,7 +5,7 @@ from matplotlib.widgets import Slider, Button
 from scipy import signal
 from scipy.optimize import curve_fit
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 import os
 
 ##############################################################
@@ -84,14 +84,197 @@ class WaveformLoader:
         elif 'ohne' in basename:
             return 'ohne'
         else:
-            tk.messagebox.showwarning("File Classification Warning","Unable to classify file type based on filename.")
+            return None
+
+class FileSelectionGUI:
+    """
+    GUI for file selection and parameter configuration
+    """
+
+    def __init__(self):
+        """
+        Initialize the GUI components
+        """
+        self.root = tk.Tk()
+        self.root.title("NE213 Analyzer - Configuration")
+        self.root.geometry("600x450")
+
+        self.selected_file = None
+        self.short_gate_ns = 25
+        self.total_gate_ns = 90
+        self.file_type = None
+        self.preview_processor = None
+
+        self._create_widgets()
+
+    def _create_widgets(self):
+        """
+        Create and layout GUI widgets
+        """
+        main_frame = ttk.Frame(self.root, padding="20")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        title_label = ttk.Label(main_frame, text="NE213 Waveform Analyzer", font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+
+        file_frame = ttk.LabelFrame(main_frame, text="Step 1: File Selection", padding="10")
+        file_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 20))
+
+        self.file_label = ttk.Label(file_frame, text="No file selected", foreground="gray")
+        self.file_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+
+        browse_btn = ttk.Button(file_frame, text="Browse...", command=self._browse_file)
+        browse_btn.grid(row=0, column=1)
+
+        self.type_label = ttk.Label(file_frame, text="", foreground="blue")
+        self.type_label.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+
+        preview_frame = ttk.Frame(main_frame)
+        preview_frame.grid(row=2, column=0, columnspan=3, pady=(0, 10))
+
+        self.preview_btn = ttk.Button(preview_frame, text="Step 2: Preview Waveforms", command=self._preview_waveforms, state=tk.DISABLED)
+        self.preview_btn.pack()
+
+        ttk.Label(preview_frame, text="(Load and view waveforms to determine gate parameters)", foreground="gray", font=('Arial', 9)).pack(pady=(5, 0))
+
+        params_frame = ttk.LabelFrame(main_frame, text="Step 3: Integration Gate Parameters", padding="10")
+        params_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 20))
+
+        ttk.Label(params_frame, text="Short Gate (ns):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.short_gate_var = tk.StringVar(value="25")
+        short_gate_entry = ttk.Entry(params_frame, textvariable=self.short_gate_var, width=10)
+        short_gate_entry.grid(row=0, column=1, padx=(10, 20), pady=5)
+        ttk.Label(params_frame, text="(10-100 ns)", foreground="gray").grid(row=0, column=2, sticky=tk.W)
+
+        ttk.Label(params_frame, text="Total Gate (ns):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.total_gate_var = tk.StringVar(value="90")
+        total_gate_entry = ttk.Entry(params_frame, textvariable=self.total_gate_var, width=10)
+        total_gate_entry.grid(row=1, column=1, padx=(10, 20), pady=5)
+        ttk.Label(params_frame, text="(50-300 ns)", foreground="gray").grid(row=1, column=2, sticky=tk.W)
+
+        info_frame = ttk.Frame(main_frame)
+        info_frame.grid(row=4, column=0, columnspan=3, pady=(0, 20))
+
+        info_text = "Binda recommended: Short=25ns, Total=90ns"
+        ttk.Label(info_frame, text=info_text, foreground="gray", justify=tk.CENTER).pack()
+
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=5, column=0, columnspan=3)
+
+        self.start_btn = ttk.Button(button_frame, text="Step 4: Start Full Analysis", command=self._start_analysis, state=tk.DISABLED)
+        self.start_btn.pack(side=tk.LEFT, padx=5)
+
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=self.root.quit)
+        cancel_btn.pack(side=tk.LEFT, padx=5)
+
+    def _browse_file(self):
+        """
+        Open file dialog to select waveform file
+        """
+        file_path = filedialog.askopenfilename(
+            title="Select NE213 waveform file",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+
+        if file_path:
+            self.selected_file = file_path
+            filename = os.path.basename(file_path)
+            self.file_label.config(text=filename, foreground="black")
+
+            self.file_type = WaveformLoader.classify_file_type(file_path)
+            if self.file_type == 'mit':
+                self.type_label.config(text="File type: WITH fusor (mit)", foreground="green")
+            elif self.file_type == 'ohne':
+                self.type_label.config(text="File type: BACKGROUND (ohne)", foreground="orange")
+            else:
+                self.type_label.config(text="File type: UNKNOWN - classification failed", foreground="red")
+
+            self.preview_btn.config(state=tk.NORMAL)
+
+    def _preview_waveforms(self):
+        if not self.selected_file:
+            return
+
+        self.preview_processor = WaveformProcessor()
+        waveforms = WaveformLoader.load_waveform_file(self.selected_file)
+        self.preview_processor.waveforms = waveforms
+        self.preview_processor._clean_waveforms()
+        self.preview_processor._baseline_correction()
+
+        fig_preview = plt.figure("Waveform Preview - Determine Gate Parameters", figsize=(14, 6))
+        ax1 = fig_preview.add_subplot(121)
+        time_axis = np.arange(350) * NS_PER_SAMPLE
+
+        for i, waveform in enumerate(self.preview_processor.waveforms_baseline_corrected[:50]):
+            ax1.plot(time_axis[:len(waveform)], waveform, alpha=0.3, linewidth=0.5)
+
+        ax1.set_xlabel('Time (ns)')
+        ax1.set_ylabel('Amplitude (baseline corrected)')
+        ax1.set_title('Raw Waveforms Preview (first 50 events)\nUse this to determine Short and Total gate positions')
+        ax1.grid(True, alpha=0.3)
+        ax1.axvline(x=25, color='green', linestyle='--', alpha=0.5, label='Suggested Short gate (25 ns)')
+        ax1.axvline(x=90, color='red', linestyle='--', alpha=0.5, label='Suggested Total gate (90 ns)')
+        ax1.legend()
+
+        ax2 = fig_preview.add_subplot(122)
+        if len(self.preview_processor.waveforms_baseline_corrected) > 0:
+            avg_waveform = np.mean(self.preview_processor.waveforms_baseline_corrected, axis=0)
+            ax2.plot(time_axis[:len(avg_waveform)], avg_waveform, 'b-', linewidth=2, label='Average waveform')
+            ax2.set_xlabel('Time (ns)')
+            ax2.set_ylabel('Amplitude')
+            ax2.set_title('Average Waveform\nShort gate captures fast component, Total gate captures slow tail')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+            ax2.axvline(x=25, color='green', linestyle='--', alpha=0.5)
+            ax2.axvline(x=90, color='red', linestyle='--', alpha=0.5)
+            ax2.set_yscale('log')
+            ax2.set_ylim(bottom=0.1)
+
+        plt.tight_layout()
+        plt.show(block=False)
+
+        self.start_btn.config(state=tk.NORMAL)
+
+    def _start_analysis(self):
+        """
+        Validate parameters and close GUI to start analysis
+        """
+        try:
+            self.short_gate_ns = float(self.short_gate_var.get())
+            self.total_gate_ns = float(self.total_gate_var.get())
+
+            if not (10 <= self.short_gate_ns <= 100):
+                tk.messagebox.showerror("Invalid Input", "Short gate must be between 10 and 100 ns")
+                return
+
+            if not (50 <= self.total_gate_ns <= 300):
+                tk.messagebox.showerror("Invalid Input", "Total gate must be between 50 and 300 ns")
+                return
+
+            if self.short_gate_ns >= self.total_gate_ns:
+                tk.messagebox.showerror("Invalid Input", "Short gate must be less than total gate")
+                return
+
+            plt.close('all')
+            self.root.quit()
+
+        except ValueError:
+            tk.messagebox.showerror("Invalid Input", "Please enter valid numbers for gate parameters")
+
+    def show(self):
+        """
+        Show the GUI and return selected parameters
+        :return: A tuple (selected_file, short_gate_ns, total_gate_ns)
+        """
+        self.root.mainloop()
+        return self.selected_file, self.short_gate_ns, self.total_gate_ns
 
 class WaveformProcessor:
     """
     Processes and analyzes waveform data
     """
 
-    def __init__(self):
+    def __init__(self, short_gate_ns=25, total_gate_ns=90):
         """
         Initalizes all necessary variables
         """
@@ -107,6 +290,8 @@ class WaveformProcessor:
         self.qshort_values = []
         self.valid_flags = []
         self.file_type = None
+        self.short_gate_ns = short_gate_ns
+        self.total_gate_ns = total_gate_ns
 
     def load_and_process(self, filename):
         """
@@ -142,19 +327,61 @@ class WaveformProcessor:
 
     def _baseline_correction(self):
         """
-        Apply baseline correction to waveforms
+        Apply baseline correction to waveforms with adaptive noise filtering
         """
         self.waveforms_baseline_corrected = []
         self.baselines = []
         self.max_amplitudes = []
         self.rise_times = []
         self.max_indices = []
+        self.rejected_waveforms = []
 
+        baseline_stds = []
         for waveform in self.waveforms_clean:
+            baseline_region = waveform[:50]
+            baseline_stds.append(np.std(baseline_region))
+
+        # Adaptive threshold: reject waveforms with baseline noise > 2x median std
+        median_baseline_std = np.median(baseline_stds)
+        noise_threshold = median_baseline_std * 3.0  # 3-sigma threshold
+
+        print(f"Baseline noise analysis:")
+        print(f"  Median baseline std: {median_baseline_std:.2f}")
+        print(f"  Adaptive noise threshold: {noise_threshold:.2f}")
+
+        for i, waveform in enumerate(self.waveforms_clean):
             # Baseline correction using first 50 samples
-            baseline = np.mean(waveform[:50])
+            baseline_region = waveform[:50]
+            baseline = np.mean(baseline_region)
+            baseline_std = np.std(baseline_region)
+
             self.baselines.append(baseline)
-            waveform_baseline_corrected = [max(0, x - baseline) for x in waveform] # were clipping to prevent negative values
+            waveform_baseline_corrected = [(x - baseline) for x in waveform]
+
+            # Adaptive noise rejection based on baseline statistics
+            if baseline_std > noise_threshold:
+                self.rejected_waveforms.append({
+                    'index': i,
+                    'reason': 'high_baseline_noise',
+                    'baseline_std': baseline_std
+                })
+                continue
+
+            # Check for unphysical negative spikes in pre-trigger region
+            # These indicate electrical noise, not real scintillation
+            first_hunderd_samples = waveform_baseline_corrected[:100]
+            min_pretrigger = min(first_hunderd_samples)
+
+            # Adaptive threshold based on baseline noise level
+            if min_pretrigger < -(6 * baseline_std + 100):  # 5-sigma + safety margin
+                self.rejected_waveforms.append({
+                    'index': i,
+                    'reason': 'negative_spike',
+                    'min_value': min_pretrigger,
+                    'threshold': -(6 * baseline_std + 100)
+                })
+                continue
+
             self.waveforms_baseline_corrected.append(waveform_baseline_corrected)
 
             # Find peak amplitude and index
@@ -172,6 +399,13 @@ class WaveformProcessor:
                 self.rise_times.append(idx_90 - idx_10)
             else:
                 self.rise_times.append(0)
+
+        print(f"  Waveforms rejected: {len(self.rejected_waveforms)} / {len(self.waveforms_clean)} ({len(self.rejected_waveforms)/len(self.waveforms_clean)*100:.1f}%)")
+        if self.rejected_waveforms:
+            noise_rejects = sum(1 for r in self.rejected_waveforms if r['reason'] == 'high_baseline_noise')
+            spike_rejects = sum(1 for r in self.rejected_waveforms if r['reason'] == 'negative_spike')
+            print(f"    - High baseline noise: {noise_rejects}")
+            print(f"    - Negative spikes: {spike_rejects}")
 
     def detect_pileup(self, waveform, max_idx, qtot, psd_factor, threshold_factor=0.25):
         """
@@ -200,7 +434,7 @@ class WaveformProcessor:
 
         # Check for abnormally high PSD factor (above typical neutron range)
         # For NE213, neutron PSD typically < 0.35, pile-up can push this higher
-        if psd_factor > 0.5:  #TODO AdrGos: Verify with Felix if this threshold is valid for NE213 or better to use 0.4-0.45 to reject more pile-up
+        if psd_factor > 0.4:  #TODO AdrGos: Verify with Felix if this threshold is valid for NE213 or better to use 0.4-0.45 to reject more pile-up
             return True
 
         # Checks for double peaks in rising edge (20 samples before peak)
@@ -220,7 +454,7 @@ class WaveformProcessor:
 
         return False
 
-    def _calculate_psd_parameters(self, short_gate_ns=25, total_gate_ns=150, pre_trigger_ns=10):
+    def _calculate_psd_parameters(self, short_gate_ns=None, total_gate_ns=None, pre_trigger_ns=10):
         """
         Calculate PSD parameters using Binda's Charge Comparison Method (Equation 8).
 
@@ -238,6 +472,11 @@ class WaveformProcessor:
             total_gate_ns: Duration of total integration gate (ns)
             pre_trigger_ns: Time before peak to start integration (ns)
         """
+        if short_gate_ns is None:
+            short_gate_ns = self.short_gate_ns
+        if total_gate_ns is None:
+            total_gate_ns = self.total_gate_ns
+
         short_gate_samples = ns_to_samples(short_gate_ns)
         total_gate_samples = ns_to_samples(total_gate_ns)
         pre_trigger_samples = ns_to_samples(pre_trigger_ns)
@@ -377,29 +616,28 @@ class NE213Analyzer:
     Main analyzer class for NE213 data visualization and analysis
     """
 
-    def __init__(self):
+    def __init__(self, short_gate_ns=25, total_gate_ns=90):
         """
         Initialize the NE213Analyzer with a waveform processor and figure list
         """
-        self.processor = WaveformProcessor()
+        self.processor = WaveformProcessor(short_gate_ns, total_gate_ns)
         self.figures = []
+        self.short_gate_ns = short_gate_ns
+        self.total_gate_ns = total_gate_ns
 
     def select_and_load_file(self):
         """
-        Open file dialog to select waveform file
+        Open enhanced GUI for file selection and parameter configuration
 
         Returns:
             bool: True if file loaded successfully, False otherwise
         """
-        root = tk.Tk()
-        root.withdraw()
-
-        file_path = filedialog.askopenfilename(
-            title="Select NE213 waveform file",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-        )
+        gui = FileSelectionGUI()
+        file_path, self.short_gate_ns, self.total_gate_ns = gui.show()
+        gui.root.destroy()
 
         if file_path:
+            self.processor = WaveformProcessor(self.short_gate_ns, self.total_gate_ns)
             self.processor.load_and_process(file_path)
             return True
         return False
@@ -420,8 +658,8 @@ class NE213Analyzer:
         ax1.set_ylabel('Amplitude (baseline corrected)')
         ax1.set_title('NE213 Scintillation Pulses (D-D Fusion)')
         ax1.grid(True, alpha=0.3)
-        ax1.axvline(x=25, color='green', linestyle='--', alpha=0.5, label='Short gate end (25 ns)')
-        ax1.axvline(x=150, color='red', linestyle='--', alpha=0.5, label='Total gate end (150 ns)')
+        ax1.axvline(x=self.short_gate_ns, color='green', linestyle='--', alpha=0.5, label=f'Short gate end ({self.short_gate_ns} ns)')
+        ax1.axvline(x=self.total_gate_ns, color='red', linestyle='--', alpha=0.5, label=f'Total gate end ({self.total_gate_ns} ns)')
         ax1.legend()
 
         # Plot Average pulse shapes comparison from binda...
@@ -447,8 +685,8 @@ class NE213Analyzer:
                     ax2.grid(True, alpha=0.3)
                     ax2.set_yscale('log')
                     ax2.set_ylim(bottom=0.1)
-                    ax2.axvline(x=25, color='green', linestyle='--', alpha=0.3)
-                    ax2.axvline(x=150, color='red', linestyle='--', alpha=0.3)
+                    ax2.axvline(x=self.short_gate_ns, color='green', linestyle='--', alpha=0.3)
+                    ax2.axvline(x=self.total_gate_ns, color='red', linestyle='--', alpha=0.3)
         else:
             # For background files, just plot average waveform...
             if self.processor.waveforms_baseline_corrected:
@@ -478,7 +716,10 @@ class NE213Analyzer:
         scatter = ax_psd.scatter(valid_qtot, valid_psd, c=valid_psd, cmap='coolwarm', alpha=0.6, s=20, edgecolors='black', linewidth=0.5)
         ax_psd.set_xlabel('Qtot - Total Charge (Energy Proxy)', fontsize=12)
         ax_psd.set_ylabel('PSD = (Qtot - Qshort) / Qtot', fontsize=12)
-        ax_psd.set_title('NE213 Pulse Shape Discrimination (Binda Method)\n' + 'D-D Fusion\n' + '(Neutrons: high PSD, Gammas: low PSD)', fontsize=14)
+        ax_psd.set_title(f'NE213 Pulse Shape Discrimination (Binda Method)\n' +
+                         f'Short={self.short_gate_ns}ns, Total={self.total_gate_ns}ns\n' +
+                         'D-D Fusion\n' +
+                         '(Neutrons: high PSD, Gammas: low PSD)', fontsize=14)
         ax_psd.grid(True, alpha=0.3)
         cbar = plt.colorbar(scatter, ax=ax_psd)
         cbar.set_label('PSD Parameter', fontsize=10)
@@ -503,8 +744,8 @@ class NE213Analyzer:
         ax_hist = fig3.add_subplot(111)
 
         # Initial parameters in NANOSECONDS
-        SHORT_GATE_NS_INIT = 25
-        TOTAL_GATE_NS_INIT = 150
+        SHORT_GATE_NS_INIT = self.short_gate_ns
+        TOTAL_GATE_NS_INIT = self.total_gate_ns
         ENERGY_THRESHOLD_INIT = 10
         BINS_INIT = 100
 
@@ -690,8 +931,8 @@ class NE213Analyzer:
         if self.processor.file_type == 'mit':
             print("Binda Charge Comparison Method (Equation 8):")
             print("   PSD = (Qtot - Qshort) / Qtot")
-            print("  Short gate: 25 ns")
-            print("  Total gate: 150 ns")
+            print(f"  Short gate: {self.short_gate_ns} ns")
+            print(f"  Total gate: {self.total_gate_ns} ns")
 
             valid_psd_plot = [self.processor.psd_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
             if valid_psd_plot:
