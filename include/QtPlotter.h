@@ -86,7 +86,7 @@ namespace ne213
          * @param short_gate_ns Short gate duration for gate line display
          * @param total_gate_ns Total gate duration for gate line display
          */
-        void plot_raw_waveforms(const std::vector<WaveformData>& waveforms, double short_gate_ns = 25.0, double total_gate_ns = 150.0);
+        void plot_raw_waveforms(const std::vector<WaveformData>& waveforms, double short_gate_ns = 25.0, double total_gate_ns = 90.0);
 
         /**
          * @brief Plot average pulse shapes for neutron/gamma comparison
@@ -135,7 +135,7 @@ namespace ne213
                                 double energy_threshold = 10.0,
                                 const FOMResult& fom_result = FOMResult(),
                                 double short_gate_ns = 25.0,
-                                double total_gate_ns = 150.0);
+                                double total_gate_ns = 90.0);
 
         /**
          * @brief Plot statistical distribution histograms

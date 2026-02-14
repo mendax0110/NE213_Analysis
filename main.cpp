@@ -43,13 +43,8 @@ int main(int argc, char* argv[])
         std::cout << "File classification: " << WaveformLoader::file_type_to_string(file_type) << "\n\n";
 
         std::cout << "Processing waveforms...\n";
-        std::vector<WaveformData> processed_waveforms;
-        processed_waveforms.reserve(raw_waveforms.size());
-
-        for (const auto& raw : raw_waveforms)
-        {
-            processed_waveforms.push_back(WaveformProcessor::process_waveform(raw));
-        }
+        auto batch_result = WaveformProcessor::process_batch(raw_waveforms);
+        auto& processed_waveforms = batch_result.waveforms;
 
         std::vector<PSDParameters> psd_params;
         FOMResult fom_result;
@@ -57,7 +52,7 @@ int main(int argc, char* argv[])
         if (file_type == FileType::MIT)
         {
             std::cout << "Calculating PSD parameters...\n";
-            const PSDAnalyzer analyzer(25.0, 150.0, 10.0);
+            const PSDAnalyzer analyzer(25.0, 90.0, 10.0);
             psd_params.reserve(processed_waveforms.size());
 
             for (const auto& wf : processed_waveforms)
@@ -93,7 +88,7 @@ int main(int argc, char* argv[])
                 processed_waveforms,
                 psd_params,
                 25.0,
-                150.0,
+                90.0,
                 10.0,
                 file_type
             );

@@ -71,7 +71,7 @@ bool PSDAnalyzer::detect_pileup(const std::vector<double>& waveform, const int m
         return true;
     }
 
-    if (psd_value > 0.5)
+    if (psd_value > 0.4)
     {
         return true;
     }

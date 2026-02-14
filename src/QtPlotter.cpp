@@ -90,12 +90,12 @@ QtPlotter::QtPlotter(QWidget *parent) : QMainWindow(parent)
 
     totalGateSlider = new QSlider(Qt::Horizontal);
     totalGateSlider->setRange(50, 300);
-    totalGateSlider->setValue(150);
+    totalGateSlider->setValue(90);
     totalGateSlider->setTickInterval(25);
     totalGateSlider->setTickPosition(QSlider::TicksBelow);
     controlLayout->addWidget(new QLabel("Total Gate (ns):"), 1, 0);
     controlLayout->addWidget(totalGateSlider, 1, 1);
-    totalGateLabel = new QLabel("150.0 ns");
+    totalGateLabel = new QLabel("90.0 ns");
     controlLayout->addWidget(totalGateLabel, 1, 2);
 
     energyThresholdSlider = new QSlider(Qt::Horizontal);

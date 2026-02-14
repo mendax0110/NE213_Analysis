@@ -126,6 +126,28 @@ namespace ne213
     };
 
     /**
+     * @brief Information about rejected events during PSD analysis \struct RejectInfo
+     */
+    struct RejectInfo
+    {
+        size_t index{0};
+        std::string reason;
+        double value{0.0};
+        double threshold{0.0};
+    };
+
+    /**
+     * @brief Result of batch processing of waveform files \struct BatchProcessingResult
+     */
+    struct BatchProcessingResult
+    {
+        std::vector<WaveformData> waveforms;
+        std::vector<RejectInfo> rejected;
+        size_t noise_rejections{0};
+        size_t spike_rejections{0};
+    };
+
+    /**
      * @brief Waveform file loader and classifier
      *
      * Handles loading waveform data from oscilloscope text files and classifies

@@ -27,14 +27,14 @@ namespace ne213
          *
          * Default values are optimized for NE213 with D-D fusion neutrons (2.45 MeV):
          * - Short gate: 25 ns (captures fast scintillation component)
-         * - Total gate: 150 ns (captures full pulse including slow component)
+         * - Total gate: 90 ns (captures full pulse including slow component)
          * - Pre-trigger: 10 ns (start integration before peak)
          *
          * @param short_gate_ns Short integration gate duration in nanoseconds
          * @param total_gate_ns Total integration gate duration in nanoseconds
          * @param pre_trigger_ns Pre-trigger time before peak to start integration
          */
-        explicit PSDAnalyzer(double short_gate_ns = 25.0, double total_gate_ns = 150.0, double pre_trigger_ns = 10.0);
+        explicit PSDAnalyzer(double short_gate_ns = 25.0, double total_gate_ns = 90.0, double pre_trigger_ns = 10.0);
 
         /**
          * @brief Calculate PSD parameters for a single waveform
@@ -62,7 +62,7 @@ namespace ne213
          * @param energy_threshold Minimum Qtot for event inclusion
          * @return FOM result with peak positions
          */
-        static FOMResult calculate_fom(const std::vector<PSDParameters>& psd_params, double energy_threshold = 100);
+        static FOMResult calculate_fom(const std::vector<PSDParameters>& psd_params, double energy_threshold = 10);
 
         /**
          * @brief Create histogram of PSD values above energy threshold
@@ -85,7 +85,7 @@ namespace ne213
 
         /**
          * @brief Set total integration gate duration
-         * @param ns Gate duration in nanoseconds (typical: 100-200 ns)
+         * @param ns Gate duration in nanoseconds (typical: 50-200 ns)
          */
         void set_total_gate(const double ns) { total_gate_ns_ = ns; }
 
@@ -122,7 +122,7 @@ namespace ne213
          * @brief Detect pile-up events using Binda's criteria
          *
          * Implements pile-up detection from Binda Section 8.1.2:
-         * 1. Abnormally high PSD (> 0.5) indicates pile-up
+         * 1. Abnormally high PSD (> 0.4) indicates pile-up
          * 2. Multiple peaks in rising edge indicate overlapping pulses
          * 3. Abnormal decay (sudden increases) indicates pile-up
          *

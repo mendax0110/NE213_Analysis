@@ -23,14 +23,24 @@ namespace ne213
          * Performs the complete processing pipeline:
          * 1. Invert waveform (NE213 pulses are negative-going)
          * 2. Calculate and subtract baseline (mean of first 50 samples)
-         * 3. Clip negative values to zero
-         * 4. Find peak amplitude and index
-         * 5. Calculate rise time (10% to 90% of peak)
+         * 3. Find peak amplitude and index
+         * 4. Calculate rise time (10% to 90% of peak)
          *
          * @param raw_data Vector of raw waveform samples from oscilloscope
          * @return Processed waveform data with extracted characteristics
          */
         static WaveformData process_waveform(const std::vector<double>& raw_data);
+
+        /**
+         * @brief Process a batch of raw waveforms
+         *
+         * Applies the processing pipeline to each waveform in the input vector.
+         * Collects results and counts of rejected events due to noise or spikes.
+         *
+         * @param raw_waveforms Vector of raw waveforms (each a vector of samples)
+         * @return Batch processing result containing processed waveforms and rejection info
+         */
+        static BatchProcessingResult process_batch(const std::vector<std::vector<double>>& raw_waveforms);
 
         /**
          * @brief Calculate baseline from waveform pre-trigger region
@@ -45,14 +55,14 @@ namespace ne213
         static double calculate_baseline(const std::vector<double>& data, size_t n_samples = 50);
 
         /**
-         * @brief Apply baseline correction and clip negative values
+         * @brief Apply baseline correction
          *
-         * Subtracts baseline from all samples and clips results to zero
-         * to prevent negative amplitudes in the corrected waveform.
+         * Subtracts baseline from all samples. Does not clip negative values,
+         * matching the Python implementation behavior.
          *
          * @param data Vector of waveform samples
          * @param baseline Baseline value to subtract
-         * @return Baseline-corrected waveform data (all values >= 0)
+         * @return Baseline-corrected waveform data
          */
         static std::vector<double> apply_baseline_correction(const std::vector<double>& data, double baseline);
 
@@ -92,5 +102,13 @@ namespace ne213
          * @return Optional index of threshold crossing, or std::nullopt if not found
          */
         static std::optional<size_t> find_threshold_crossing(const std::vector<double>& data, double threshold);
+
+        /**
+         * @brief Calculate standard devication of baseline region
+         * @param data Vector of waveform samples
+         * @param n_samples Number of initial samples to use for baseline std calculation (default: 50)
+         * @return Population standard deviation of the baseline region.
+         */
+        static double calculate_baseline_std(const std::vector<double>& data, size_t n_samples = 50);
     };
 }
