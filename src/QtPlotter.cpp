@@ -622,8 +622,8 @@ void QtPlotter::update_psd_histogram()
     chart->setTitle(title);
     chart->setAnimationOptions(QChart::NoAnimation);
 
-    auto series = new QBarSeries();
-    auto barSet = new QBarSet("PSD Distribution");
+    const auto series = new QBarSeries();
+    const auto barSet = new QBarSet("PSD Distribution");
 
     for (int i = 0; i < currentBins; ++i)
     {
@@ -651,13 +651,13 @@ void QtPlotter::update_psd_histogram()
         }
     }
 
-    auto categoryAxis = new QBarCategoryAxis();
+    const auto categoryAxis = new QBarCategoryAxis();
     categoryAxis->append(categories);
     categoryAxis->setTitleText("PSD = (Qtot - Qshort) / Qtot");
     chart->addAxis(categoryAxis, Qt::AlignBottom);
     series->attachAxis(categoryAxis);
 
-    auto axisY = new QValueAxis();
+    const auto axisY = new QValueAxis();
     axisY->setTitleText("Counts");
     axisY->setLabelFormat("%d");
     chart->addAxis(axisY, Qt::AlignLeft);
