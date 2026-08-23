@@ -164,7 +164,8 @@ class Preprocessor:
             if is_16bit:
                 wf = wf.astype(np.float64)
             else:
-                wf = np.array([v - 255 if v > 128 else v for v in wf], dtype=np.float64)
+                wf = wf.astype(np.float64)
+                wf = np.where(wf > 128, wf - 255, wf)
 
             # Invert Flip from negative to positive pulses...
             wf = -wf
@@ -384,17 +385,20 @@ class FeatureExtractor:
 
     @staticmethod
     def _threshold_crossing(wf, threshold, start, end):
-        for i in range(start, min(end, len(wf))):
-            if wf[i] >= threshold:
-                return i
-        return None
+        end = min(end, len(wf))
+        segment = wf[start:end]
+        mask = segment >= threshold
+        if not mask.any():
+            return None
+        return start + int(np.argmax(mask))
 
     @staticmethod
     def _threshold_crossing_decay(wf, threshold, peak_idx):
-        for i in range(peak_idx, len(wf)):
-            if wf[i] <= threshold:
-                return i
-        return None
+        segment = wf[peak_idx:]
+        mask = segment <= threshold
+        if not mask.any():
+            return None
+        return peak_idx + int(np.argmax(mask))
 
 
 #============================================================================#
