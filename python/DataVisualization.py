@@ -1,11 +1,10 @@
-from pickle import NONE
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 from scipy import signal
 from scipy.optimize import curve_fit
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, ttk, messagebox
 import os
 
 ##############################################################
@@ -19,11 +18,20 @@ SAMPLE_RATE_GS = 2.0  # GigaSamples per second
 NS_PER_SAMPLE = 1.0 / SAMPLE_RATE_GS  # 0.5 ns per sample
 SAMPLES_PER_NS = 1.0 / NS_PER_SAMPLE  # 2.0 samples per ns
 
+# ADC values above this wrypped around from a signed 8bit reading
+ADC_WRAP_THRESHOLD = 128
+ADC_WRAP_OFFSET = 255
+
+# Baseline-noise rejection tuning
+BASELINE_NOISE_SIGMA_MULTIPLIER = 3.0
+PRETRIGGER_SPIKE_SIGMA_MULTIPLIER = 6
+PRETRIGGER_SPIKE_SAFETY_MARGIN = 100
+
 def ns_to_samples(ns):
     """Convert nanoseconds to sample indices"""
     return int(ns * SAMPLES_PER_NS)
 
-# then the 350 samples we aare interesed in correspond to 175 ns
+# then the 350 samples we are interesed in correspond to 175 ns
 def samples_to_ns(samples):
     """Convert sample indices to nanoseconds"""
     return samples / SAMPLES_PER_NS
@@ -31,9 +39,6 @@ def samples_to_ns(samples):
 class WaveformLoader:
     """
     Handles loading and classification of waveform files
-
-    Returns:
-        _type_: _description_
     """
 
     @staticmethod
@@ -51,6 +56,7 @@ class WaveformLoader:
             lines = f.readlines()
             waveforms = []
 
+            skipped = 0
             for i in range(0, len(lines), 3):
                 line = lines[i].strip()
                 if not line:
@@ -61,10 +67,19 @@ class WaveformLoader:
 
                 data = [x for x in line.split(',') if x]
                 data = data[:350]
-                waveform = [(float(x) - 255 if float(x) > 128 else float(x)) for x in data]
+
+                try:
+                    waveform = [(float(x) - ADC_WRAP_OFFSET if float(x) > ADC_WRAP_THRESHOLD else float(x)) for x in data]
+                except ValueError:
+                    skipped += 1
+                    continue
+
                 waveforms.append(waveform)
 
         print(f"Loaded {len(waveforms)} waveforms from file: {filename}")
+        if skipped:
+            print(f"  Warning: skipped {skipped} malformed line(s) while loading {filename}")
+
         return waveforms
 
     @staticmethod
@@ -244,22 +259,22 @@ class FileSelectionGUI:
             self.total_gate_ns = float(self.total_gate_var.get())
 
             if not (10 <= self.short_gate_ns <= 100):
-                tk.messagebox.showerror("Invalid Input", "Short gate must be between 10 and 100 ns")
+                messagebox.showerror("Invalid Input", "Short gate must be between 10 and 100 ns")
                 return
 
             if not (50 <= self.total_gate_ns <= 300):
-                tk.messagebox.showerror("Invalid Input", "Total gate must be between 50 and 300 ns")
+                messagebox.showerror("Invalid Input", "Total gate must be between 50 and 300 ns")
                 return
 
             if self.short_gate_ns >= self.total_gate_ns:
-                tk.messagebox.showerror("Invalid Input", "Short gate must be less than total gate")
+                messagebox.showerror("Invalid Input", "Short gate must be less than total gate")
                 return
 
             plt.close('all')
             self.root.quit()
 
         except ValueError:
-            tk.messagebox.showerror("Invalid Input", "Please enter valid numbers for gate parameters")
+            messagebox.showerror("Invalid Input", "Please enter valid numbers for gate parameters")
 
     def show(self):
         """
@@ -289,13 +304,19 @@ class WaveformProcessor:
         self.qtot_values = []
         self.qshort_values = []
         self.valid_flags = []
+        self.rejected_waveforms = []
         self.file_type = None
         self.short_gate_ns = short_gate_ns
         self.total_gate_ns = total_gate_ns
 
+    @staticmethod
+    def filter_valid(values, valid_flags):
+        """Return only the entries of `values` where the matching valid_flags entry is True."""
+        return [value for value, ok in zip(values, valid_flags) if ok]
+
     def load_and_process(self, filename):
         """
-        Load and process waveforms from file
+        Load and process waveforms from a text file
 
         Args:
             filename (str): Path to the waveform data file
@@ -343,7 +364,7 @@ class WaveformProcessor:
 
         # Adaptive threshold: reject waveforms with baseline noise > 2x median std
         median_baseline_std = np.median(baseline_stds)
-        noise_threshold = median_baseline_std * 3.0  # 3-sigma threshold
+        noise_threshold = median_baseline_std * BASELINE_NOISE_SIGMA_MULTIPLIER
 
         print(f"Baseline noise analysis:")
         print(f"  Median baseline std: {median_baseline_std:.2f}")
@@ -372,13 +393,14 @@ class WaveformProcessor:
             first_hunderd_samples = waveform_baseline_corrected[:100]
             min_pretrigger = min(first_hunderd_samples)
 
+            spike_threshold = -(PRETRIGGER_SPIKE_SIGMA_MULTIPLIER * baseline_std + PRETRIGGER_SPIKE_SAFETY_MARGIN)
             # Adaptive threshold based on baseline noise level
-            if min_pretrigger < -(6 * baseline_std + 100):  # 5-sigma + safety margin
+            if min_pretrigger < spike_threshold:
                 self.rejected_waveforms.append({
                     'index': i,
                     'reason': 'negative_spike',
                     'min_value': min_pretrigger,
-                    'threshold': -(6 * baseline_std + 100)
+                    'threshold': spike_threshold
                 })
                 continue
 
@@ -505,7 +527,7 @@ class WaveformProcessor:
             short_end = min(len(waveform), start_idx + short_gate_samples)
             qshort = np.sum(waveform[start_idx:short_end])
 
-            # PSD parameter calculation form binda
+            # PSD parameter calculation from binda
             # The slow component fraction = (Qtot - Qshort) / Qtot
             # Neutrons have longer decay (more slow component) -> higher PSD
             # Gammas have shorter decay (less slow component) -> lower PSD
@@ -602,7 +624,7 @@ class WaveformProcessor:
                 # Fallback to std method fails..
                 fwhm = 0.01
 
-            return max(fwhm, 0.001)  # avoid division byy zero
+            return max(fwhm, 0.001)  # avoid division by zero
 
         gamma_fwhm = calculate_fwhm(hist, bin_centers, gamma_peak_idx)
         neutron_fwhm = calculate_fwhm(hist, bin_centers, neutron_peak_idx)
@@ -710,8 +732,8 @@ class NE213Analyzer:
 
         fig2, ax_psd = plt.subplots(figsize=(10, 8), num="PSD Analysis: NE213 Neutron-Gamma Discrimination")
         # Filter for valid events
-        valid_qtot = [self.processor.qtot_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
-        valid_psd = [self.processor.psd_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
+        valid_qtot = self.processor.filter_valid(self.processor.qtot_values, self.processor.valid_flags)
+        valid_psd = self.processor.filter_valid(self.processor.psd_values, self.processor.valid_flags)
 
         scatter = ax_psd.scatter(valid_qtot, valid_psd, c=valid_psd, cmap='coolwarm', alpha=0.6, s=20, edgecolors='black', linewidth=0.5)
         ax_psd.set_xlabel('Qtot - Total Charge (Energy Proxy)', fontsize=12)
@@ -795,7 +817,7 @@ class NE213Analyzer:
                 if fom > 0:
                     title += f'\nY peak={gamma_pk:.3f} | n peak={neutron_pk:.3f}'
                     if fom > 2.0:
-                        title += ' | VERY GGOOD (matching Binda JET results)'
+                        title += ' | VERY GOOD (matching Binda JET results)'
                     elif fom > 1.0:
                         title += ' | GOOD discrimination'
                     elif fom > 0.5:
@@ -866,9 +888,9 @@ class NE213Analyzer:
 
         if self.processor.file_type == 'mit':
             # Comparision of Qtot vs Qshort scatter plot, only for valid events
-            valid_qtot_plot = [self.processor.qtot_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
-            valid_qshort_plot = [self.processor.qshort_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
-            valid_psd_plot = [self.processor.psd_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
+            valid_qtot_plot = self.processor.filter_valid(self.processor.qtot_values, self.processor.valid_flags)
+            valid_qshort_plot = self.processor.filter_valid(self.processor.qshort_values, self.processor.valid_flags)
+            valid_psd_plot = self.processor.filter_valid(self.processor.psd_values, self.processor.valid_flags)
 
             ax4c.scatter(valid_qtot_plot, valid_qshort_plot, alpha=0.5, s=10, c=valid_psd_plot, cmap='coolwarm')
             ax4c.set_xlabel('Qtot (total charge)')
@@ -911,6 +933,10 @@ class NE213Analyzer:
         print("="*70)
         print(f"Total events captured: {len(self.processor.waveforms)}")
 
+        if not self.processor.max_amplitudes:
+            print("No valid waveforms survived baseline correction, nothing to summarize.")
+            return
+
         if self.processor.file_type == 'mit':
             print(f"Valid events (pile-up rejected): {sum(self.processor.valid_flags)} ({sum(self.processor.valid_flags)/len(self.processor.valid_flags)*100:.1f}%)")
             print(f"Pile-up events rejected: {len(self.processor.valid_flags) - sum(self.processor.valid_flags)} ({(len(self.processor.valid_flags) - sum(self.processor.valid_flags))/len(self.processor.valid_flags)*100:.1f}%)")
@@ -934,15 +960,15 @@ class NE213Analyzer:
             print(f"  Short gate: {self.short_gate_ns} ns")
             print(f"  Total gate: {self.total_gate_ns} ns")
 
-            valid_psd_plot = [self.processor.psd_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
+            valid_psd_plot = self.processor.filter_valid(self.processor.psd_values, self.processor.valid_flags)
             if valid_psd_plot:
                 print(f"  PSD range: [{min(valid_psd_plot):.4f}, {max(valid_psd_plot):.4f}]")
                 print(f"  PSD mean: {np.mean(valid_psd_plot):.4f}")
                 print(f"  PSD std: {np.std(valid_psd_plot):.4f}")
             print()
 
-            valid_qtot_plot = [self.processor.qtot_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
-            valid_qshort_plot = [self.processor.qshort_values[i] for i, v in enumerate(self.processor.valid_flags) if v]
+            valid_qtot_plot = self.processor.filter_valid(self.processor.qtot_values, self.processor.valid_flags)
+            valid_qshort_plot = self.processor.filter_valid(self.processor.qshort_values, self.processor.valid_flags)
             print("Integrated Charges:")
             if valid_qtot_plot and valid_qshort_plot:
                 print(f"  Qtot mean: {np.mean(valid_qtot_plot):.1f}")
@@ -964,7 +990,7 @@ class NE213Analyzer:
             print("    - Baselga (best method): FOM = 1.04")
 
             if fom > 2.0:
-                print("  [RESULT] VERY GGOOD discrimination (matching JET NE213 performance)")
+                print("  [RESULT] VERY GOOD discrimination (matching JET NE213 performance)")
                 if valid_psd_plot:
                     median_psd = np.median(valid_psd_plot)
                     neutron_count = sum(1 for psd_val, v in zip(self.processor.psd_values, self.processor.valid_flags) if psd_val > median_psd and v)
